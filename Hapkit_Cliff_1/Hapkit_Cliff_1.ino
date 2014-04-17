@@ -9,6 +9,7 @@
 #include <math.h>
 
 // Defines
+#define SAMPLE_PERIOD  (double)0.0004 //0.4ms
 #define DEBUG 1
 #define DEBUG_SERIAL if(DEBUG) Serial
 
@@ -24,6 +25,7 @@ int fsrPin = A3; // input pin for FSR sensor
 
 // Position tracking variables
 int updatedPos = 0;     // keeps track of the latest updated value of the MR sensor reading
+int prev_updatedPos = 0;// for velocity calc
 int rawPos = 0;         // current raw reading from MR sensor
 int lastRawPos = 0;     // last raw reading from MR sensor
 int lastLastRawPos = 0; // last last raw reading from MR sensor
@@ -38,6 +40,7 @@ boolean flipped = false;
 
 // Kinematics variables
 double xh = 0;           // position of the handle [m]
+double vel_h = 0;        //handle velocity [m/s]
 
 // Force output variables
 double force = 0;           // force at the handle
@@ -91,8 +94,16 @@ void setup()
 // --------------------------------------------------------------
 void loop()
 {
+  int local_updatedPos;
+  int local_prev_updatedPos;
+  double prev_xh;
   
   //position calculated in interrupt response
+  
+  //NOTE: THIS SHOULD BE IN A PROTECTED REGION ********
+  local_updatedPos = updatedPos;
+  local_prev_updatedPos = prev_updatedPos;
+  //***************************************************
  
   //*************************************************************
   //*** Section 2. Compute position in meters *******************
@@ -104,21 +115,30 @@ void loop()
   double l_handle = 0.07; //70.00 mm - Solidworks
      
   // Step B.1: print updatedPos via serial monitor
-  //DEBUG_SERIAL.print("Updated pos ");
-  //DEBUG_SERIAL.print(updatedPos);
+  DEBUG_SERIAL.print("Updated pos ");
+  DEBUG_SERIAL.print(local_updatedPos);
+  DEBUG_SERIAL.print("\tPrev updated pos ");
+  DEBUG_SERIAL.print(local_prev_updatedPos);
   
   // Step B.6: double ts = ?; // Compute the angle of the sector pulley (ts) in degrees based on updatedPos
   //y = -0.00970857x + 7.33554011 
-  double theta_pulley = (-0.0097086 * updatedPos + 7.33554);  //degrees!
+  double theta_pulley = (-0.0097086 * local_updatedPos + 7.33554);  //degrees!
+  double prev_theta = (-0.0097086 * local_prev_updatedPos + 7.33554);
   //DEBUG_SERIAL.print(" \tpulley angle ");
   //DEBUG_SERIAL.print(theta_pulley);
   
   // Step B.7: xh = ?;       // Compute the position of the handle (in meters) based on ts (in radians)
   xh = theta_pulley * PI / 180 * l_handle;
+
+  //calculate velocity
+  prev_xh = prev_theta * PI / 180 * l_handle;
+  vel_h = (xh - prev_xh) / SAMPLE_PERIOD;
   
   // Step B.8: print xh via serial monitor
   DEBUG_SERIAL.print(" \tx_handle ");
-  DEBUG_SERIAL.println(xh,4);  
+  DEBUG_SERIAL.print(xh,4);  
+  DEBUG_SERIAL.print(" \tvel_handle ");
+  DEBUG_SERIAL.println(vel_h,4);  
   //*************************************************************
   //*** Section 3. Assign a motor output force in Newtons *******  
   //*************************************************************
@@ -168,6 +188,10 @@ void calculatePosition()
 {
   //toggle bit 5 high (pin 13)
   //PORTB |= B00100000;
+  
+  //update "previous updatedPos" before updating position
+  prev_updatedPos = updatedPos;
+  
   // Get voltage output by MR sensor
   rawPos = analogRead(sensorPosPin);  //current raw position from MR sensor
 
