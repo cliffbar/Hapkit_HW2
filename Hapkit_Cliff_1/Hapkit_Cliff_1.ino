@@ -15,7 +15,10 @@
 
 #define DEBUG_PIN 13
 
-//#define PI 3.1415926535897932384626433832795
+#define HANDLE_LENGTH (double)0.07 //70.00 mm - Solidworks
+#define SECTOR_RADIUS (double)0.0757 //calipers
+#define MOTOR_RADIUS (double)0.00837 //m - calipers
+
 
 // Pin declares
 int pwmPin = 5; // PWM output pin for motor 1
@@ -94,53 +97,15 @@ void setup()
 // --------------------------------------------------------------
 void loop()
 {
-  int local_updatedPos;
-  int local_prev_updatedPos;
-  double prev_xh;
-  double vel_h_uf;  //unfilitered velocity
-  double prev_vel_h_uf; //previous unfiltered velocity
-  double prev_vel_h; //previous filtered velocity
+  //should be in a protected region ***********
+  double local_xh = xh;
+  double local_vel_h = vel_h;
+  //*******************************************
+
   
   //position calculated in interrupt response
   
-
- 
-  //*************************************************************
-  //*** Section 2. Compute position in meters *******************
-  //*************************************************************
-  
-  //NOTE: THIS SHOULD BE IN A PROTECTED REGION ********
-  local_updatedPos = updatedPos;
-  local_prev_updatedPos = prev_updatedPos;
-  //***************************************************
-  
-  // Define kinematic parameters you may need
-     //double rh = ?;   //[m]
-  double l_handle = 0.07; //70.00 mm - Solidworks
-     
-  // Step B.1: print updatedPos via serial monitor
-  DEBUG_SERIAL.print("Updated pos ");
-  DEBUG_SERIAL.print(local_updatedPos);
-  DEBUG_SERIAL.print("\tPrev updated pos ");
-  DEBUG_SERIAL.print(local_prev_updatedPos);
-  
-  // Step B.6: double ts = ?; // Compute the angle of the sector pulley (ts) in degrees based on updatedPos
-  //y = -0.00970857x + 7.33554011 
-  double theta_pulley = (-0.0097086 * local_updatedPos + 7.33554);  //degrees!
-  double prev_theta = (-0.0097086 * local_prev_updatedPos + 7.33554);
-  //DEBUG_SERIAL.print(" \tpulley angle ");
-  //DEBUG_SERIAL.print(theta_pulley);
-  
-  // Step B.7: xh = ?;       // Compute the position of the handle (in meters) based on ts (in radians)
-  xh = theta_pulley * PI / 180 * l_handle;
-
-  //calculate velocity
-  prev_xh = prev_theta * PI / 180 * l_handle;
-  vel_h_uf = (xh - prev_xh) / SAMPLE_PERIOD;
-  
-  //low pass filter: corner freq f_sample/4, H(s) = 1 / (1 + s/wc), wc = 3,927 rad/s
-  //tustin approximation w/ sample time 400us: Y = H(z) X, H(z) = (0.4399 z + 0.4399) / (z - 0.1202), Y = filtered, X = unfiltered
-  vel_h = 0.4399 * vel_h_uf + 0.4399 * prev_vel_h_uf + 0.1202 * prev_vel_h; //discrete low pass filter
+  //getVelocity();
   
   // Step B.8: print xh via serial monitor
   DEBUG_SERIAL.print(" \tx_handle ");
@@ -151,12 +116,7 @@ void loop()
   //*** Section 3. Assign a motor output force in Newtons *******  
   //*************************************************************
  
-  // ADD YOUR CODE HERE
-  // Define kinematic parameters you may need
-     //double rp = ?;   //[m]
-  double r_sector_pulley = 0.0757; //m - caliper
-  double r_motor_pulley = 0.00837; //m - calipers
-     //double rs = ?;   //[m] 
+
   // Step C.1: force = ?; // In lab 3, you will generate a force by simply assigning this to a constant number (in Newtons)
   force = 0.5; //N  
     
@@ -164,7 +124,7 @@ void loop()
   //DEBUG_SERIAL.println(force);
   // Step C.2: Tp = ?;    // Compute the require motor pulley torque (Tp) to generate that force
   // Slide 27, lecture 2: 
-  Tp =  l_handle * r_motor_pulley / r_sector_pulley * force;
+  Tp =  (HANDLE_LENGTH * MOTOR_RADIUS) / (SECTOR_RADIUS * force);
  
   //*************************************************************
   //*** Section 4. Force output (do not change) *****************
@@ -236,6 +196,44 @@ void calculatePosition()
   //toggle bit 5 low (pin 13)
   //PORTB &= ~B00100000;  
 }
+
+void getVelocity()
+{
+  static double prev_xh;
+  static double vel_h_uf;  //unfilitered velocity
+  static double prev_vel_h_uf; //previous unfiltered velocity
+  static double prev_vel_h; //previous filtered velocity
+  //*************************************************************
+  //*** Section 2. Compute position in meters *******************
+  //*************************************************************
+     
+  // Step B.1: print updatedPos via serial monitor
+//  DEBUG_SERIAL.print("Updated pos ");
+//  DEBUG_SERIAL.print(updatedPos);
+//  DEBUG_SERIAL.print("\tPrev updated pos ");
+//  DEBUG_SERIAL.print(prev_updatedPos);
+  
+  // Step B.6: double ts = ?; // Compute the angle of the sector pulley (ts) in degrees based on updatedPos
+  //y = -0.00970857x + 7.33554011 
+  double theta_pulley = (-0.0097086 * updatedPos + 7.33554);  //degrees!
+  //double prev_theta = (-0.0097086 * prev_updatedPos + 7.33554);
+  //DEBUG_SERIAL.print(" \tpulley angle ");
+  //DEBUG_SERIAL.print(theta_pulley);
+  
+  // Step B.7: xh = ?;       // Compute the position of the handle (in meters) based on ts (in radians)
+  prev_xh = xh;
+  xh = theta_pulley * PI / 180 * HANDLE_LENGTH;
+
+  //calculate velocity
+  prev_vel_h_uf = vel_h_uf;
+  vel_h_uf = (xh - prev_xh) / SAMPLE_PERIOD;
+  
+  //low pass filter: corner freq f_sample/4, H(s) = 1 / (1 + s/wc), wc = 3,927 rad/s
+  //tustin approximation w/ sample time 400us: Y = H(z) X, H(z) = (0.4399 z + 0.4399) / (z - 0.1202), Y = filtered, X = unfiltered
+  prev_vel_h = vel_h;
+  vel_h = 0.4399 * vel_h_uf + 0.4399 * prev_vel_h_uf + 0.1202 * prev_vel_h; //discrete low pass filter
+}
+
 
 // --------------------------------------------------------------
 // Function to set PWM Freq -- DO NOT EDIT
@@ -321,6 +319,7 @@ ISR(TIMER1_COMPA_vect)
   //*************************************************************
 
   calculatePosition();
+  getVelocity();
   PORTB &= ~B00100000;
   //PORTB &= ~B00000001; //clear bit B1
 }
