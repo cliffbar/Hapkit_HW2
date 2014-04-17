@@ -40,7 +40,7 @@ boolean flipped = false;
 
 // Kinematics variables
 double xh = 0;           // position of the handle [m]
-double vel_h = 0;        //handle velocity [m/s]
+double vel_h = 0;        //handle velocity [m/s] - filtered
 
 // Force output variables
 double force = 0;           // force at the handle
@@ -97,18 +97,22 @@ void loop()
   int local_updatedPos;
   int local_prev_updatedPos;
   double prev_xh;
+  double vel_h_uf;  //unfilitered velocity
+  double prev_vel_h_uf; //previous unfiltered velocity
+  double prev_vel_h; //previous filtered velocity
   
   //position calculated in interrupt response
+  
+
+ 
+  //*************************************************************
+  //*** Section 2. Compute position in meters *******************
+  //*************************************************************
   
   //NOTE: THIS SHOULD BE IN A PROTECTED REGION ********
   local_updatedPos = updatedPos;
   local_prev_updatedPos = prev_updatedPos;
   //***************************************************
- 
-  //*************************************************************
-  //*** Section 2. Compute position in meters *******************
-  //*************************************************************
-
   
   // Define kinematic parameters you may need
      //double rh = ?;   //[m]
@@ -132,7 +136,11 @@ void loop()
 
   //calculate velocity
   prev_xh = prev_theta * PI / 180 * l_handle;
-  vel_h = (xh - prev_xh) / SAMPLE_PERIOD;
+  vel_h_uf = (xh - prev_xh) / SAMPLE_PERIOD;
+  
+  //low pass filter: corner freq f_sample/4, H(s) = 1 / (1 + s/wc), wc = 3,927 rad/s
+  //tustin approximation w/ sample time 400us: Y = H(z) X, H(z) = (0.4399 z + 0.4399) / (z - 0.1202), Y = filtered, X = unfiltered
+  vel_h = 0.4399 * vel_h_uf + 0.4399 * prev_vel_h_uf + 0.1202 * prev_vel_h; //discrete low pass filter
   
   // Step B.8: print xh via serial monitor
   DEBUG_SERIAL.print(" \tx_handle ");
@@ -282,10 +290,10 @@ void InitOC()
   TCCR1B |= _BV(WGM12);
   
   //debug output
-  //COM1A1:0 set to 0,1 for toggle --> square wave at 1/2 expected freq, good for debugging
+  //COM1A1:0 set to 0,1 for toggle --> set OC1A (B1) bit high (will clear at end of calculation) --> just toggle instead
   //from table 15-1 on page 134
+  TCCR1A |= _BV(COM1A1) | _BV(COM1A0);
   TCCR1A &= ~_BV(COM1A1);
-  TCCR1A |= _BV(COM1A0);
   
   //CS12:0 set to 1,0,0 for clk/256 prescaling: runs on 16MHz clock
   //table 15-5
@@ -307,11 +315,13 @@ void InitOC()
 //Timer 1 interrupt for performing position calculations
 ISR(TIMER1_COMPA_vect)
 {
-  //PORTB ^= B00100000;
+  PORTB |= B00100000;
   //*************************************************************
   //*** Section 1. Compute position in counts (do not change) ***  
   //*************************************************************
 
   calculatePosition();
+  PORTB &= ~B00100000;
+  //PORTB &= ~B00000001; //clear bit B1
 }
 
