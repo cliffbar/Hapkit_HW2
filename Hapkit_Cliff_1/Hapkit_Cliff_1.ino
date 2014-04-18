@@ -21,15 +21,15 @@
 #define MOTOR_RADIUS (double)0.00837 //m - calipers
 
 //select virtual environment
-#define VIRTUAL_WALL       1
-#define LINEAR_DAMP        2
-#define NONLINEAR_FRIC     3
-#define HARD_SURFACE       4
-#define BUMP_VALLEY        5
-#define TEXTURE            6
-#define MSD                7
+#define VIRTUAL_WALL       (char)'A'
+#define LINEAR_DAMP        (char)'B'
+#define NONLINEAR_FRIC     (char)'C'
+#define HARD_SURFACE       (char)'D'
+#define BUMP_VALLEY        (char)'E'
+#define TEXTURE            (char)'F'
+#define MSD                (char)'G'
 
-#define ENV_TYPE           BUMP_VALLEY
+#define ENV_TYPE           LINEAR_DAMP//BUMP_VALLEY
 
 // Pin declares
 int pwmPin = 5; // PWM output pin for motor 1
@@ -100,6 +100,23 @@ void setup()
   InitOC();
   
   Serial.println("Initialized");
+  
+  Serial.println("Select environment type: ");
+  Serial.print("Virtual Wall\t\t\t");
+  Serial.println(VIRTUAL_WALL);
+  Serial.print("Linear Damping\t\t\t");
+  Serial.println(LINEAR_DAMP);
+  Serial.print("Nonlinear Friction\t\t");
+  Serial.println(NONLINEAR_FRIC);
+  Serial.print("Hard Surface\t\t\t");
+  Serial.println(HARD_SURFACE);
+  Serial.print("Bump and Valley\t\t\t");
+  Serial.println(BUMP_VALLEY);
+  Serial.print("Texture\t\t\t\t");
+  Serial.println(TEXTURE);
+  Serial.print("Mass, Spring, Damper\t\t");
+  Serial.println(MSD);
+
 }
 
 
@@ -109,6 +126,45 @@ void setup()
 void loop()
 {
   //position, velocity calculated in interrupt response
+
+
+  //allow user to select environment type
+  static char env_type = ENV_TYPE;
+  if(Serial.available())
+  {
+    env_type = Serial.read();
+    Serial.print("You've selected ");  
+    switch(env_type)
+    {
+      case VIRTUAL_WALL:
+        Serial.println("Virtual Wall");
+      break;
+      
+      case LINEAR_DAMP:      
+        Serial.println("Linear Damping");  
+      break;
+  
+      case NONLINEAR_FRIC:
+        Serial.println("Nonlinear Friction");
+      break;
+      
+      case HARD_SURFACE:
+        Serial.println("Hard Surface");
+      break;
+  
+      case BUMP_VALLEY:
+        Serial.println("Bump and Valley");  
+      break;
+  
+      case TEXTURE:
+         Serial.println("Texture");
+      break;
+      
+      case MSD:
+         Serial.println("Mass, Spring, Damper");
+      break;
+    }
+  }
 
   //should be in a protected region ***********
   double local_xh = xh;
@@ -124,36 +180,38 @@ void loop()
   //*************************************************************
   //*** Section 3. Assign a motor output force in Newtons *******  
   //*************************************************************
+  
+  
  
   //**************** VIRTUAL ENVIRONMENTS *********************
   //constants/coefficients
   
   //virtual wall
   //spring constant
-  double k = 10; //N/m
+  double k = 50; //N/m
   //wall position
   double x_wall = 0.005; //m
 
   //linear damping
   //damping constant
-  double b = 2; //N*s/m
+  double b = 10; //N*s/m
   
   //nonlinear friction
-  double F_dyn = 0.1;   //roughly smallest noticeable force
+  double F_dyn = 0.5;   //roughly smallest noticeable force
   //note: cp = cn
   double bn = 1.5;   //speeds probably top out around 0.3 during actual manipulation  
   //note: bp = bn
-  double F_stat = 0.2;   //"static" friction
+  double F_stat = 1.5;   //"static" friction
   //note Dp = Dn
-  double dv = 0.02;  //"static" band
+  double dv = 0.025;  //"static" band
   
   //Hapkit range is +/- 5cm -> bump/valley 3cm wide, centered at +/-2.5cm
   double center_pt = 0.025; //2.5cm on either side
   double bump_width = 0.03; //3cm width
   double g = 9.8; //m/s^2
-  double mass = 0.025; //kg
+  double mass = 0.05; //kg
     
-  switch(ENV_TYPE)
+  switch(env_type)
   {
     //4A: Implements virtual wall with stiffness k at x = 0.5cm
     case VIRTUAL_WALL:
@@ -182,7 +240,7 @@ void loop()
       }
       //-dv < x' < 0, account for noise
       //f = constant
-      else if(local_vel_h < 0.01)
+      else if(local_vel_h < -0.01)
       {
         force = F_stat;
       }
@@ -234,7 +292,7 @@ void loop()
     default:
       // Step C.1: force = ?; // In lab 3, you will generate a force by simply assigning this to a constant number (in Newtons)
 //      force = 0.5; //N  
-   break;
+     break;
   }
   
   DEBUG_SERIAL.print(" \tForce");
