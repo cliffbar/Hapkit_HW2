@@ -10,7 +10,7 @@
 
 // Defines
 #define SAMPLE_PERIOD  (double)0.0004 //0.4ms
-#define DEBUG 1
+#define DEBUG 0
 #define DEBUG_SERIAL if(DEBUG) Serial
 
 #define DEBUG_PIN 13
@@ -126,18 +126,32 @@ void loop()
   //*************************************************************
  
   //**************** VIRTUAL ENVIRONMENTS *********************
-  //necessary constants
+  //constants/coefficients
+  
+  //virtual wall
   //spring constant
   double k = 10; //N/m
   //wall position
   double x_wall = 0.005; //m
+
+  //linear damping
   //damping constant
   double b = 2; //N*s/m
+  
+  //nonlinear friction
+  double F_dyn = 0.1;   //roughly smallest noticeable force
+  //note: cp = cn
+  double bn = 1.5;   //speeds probably top out around 0.3 during actual manipulation  
+  //note: bp = bn
+  double F_stat = 0.2;   //"static" friction
+  //note Dp = Dn
+  double dv = 0.02;  //"static" band
+  
   //Hapkit range is +/- 5cm -> bump/valley 3cm wide, centered at +/-2.5cm
   double center_pt = 0.025; //2.5cm on either side
   double bump_width = 0.03; //3cm width
   double g = 9.8; //m/s^2
-  double mass = 0.1; //kg
+  double mass = 0.025; //kg
     
   switch(ENV_TYPE)
   {
@@ -158,7 +172,31 @@ void loop()
     break;
     
     //4C: Karnopp model
+    //four cases: x' > dv, 0 < x' < dv, -dv < x' < 0, x' < -dv
     case NONLINEAR_FRIC:
+      //x' > dv, x' < -dv
+      if(local_vel_h > dv | local_vel_h < -dv)
+      {
+        //F = cn * sgn(x') + bn * x'
+        force = -(F_dyn * local_vel_h / abs(local_vel_h) + bn * local_vel_h);
+      }
+      //-dv < x' < 0, account for noise
+      //f = constant
+      else if(local_vel_h < 0.01)
+      {
+        force = F_stat;
+      }
+      //0 < x' < dv, account for noise
+      //f = constant
+      else if(local_vel_h > 0.01)
+      {
+        force = -F_stat;
+      }
+      else
+      {
+        //x' = 0, so no force applied
+        local_vel_h = 0;
+      }
     
     break;
     
@@ -169,23 +207,23 @@ void loop()
 
     //4E: bump at x<0, valley at x>0
     case BUMP_VALLEY:
-    //for bumps and valleys, have Hapkit apply the gravitational force that's parallel to the "ground"
-    //using sinusoidal bumps/valleys, f = m*g*sin(pi*x_rel/length), where "x_rel" is position relative to the maximum (or minimum) point
-        
-    //BUMP: point in range of center_pt +/- bump_width/2
-    if(local_xh < -(center_pt - bump_width/2) & local_xh > -(center_pt + bump_width/2))
-    {
-      force = mass * g * sin(2 * PI * (local_xh - (-center_pt)) / bump_width);
-    }
-    //VALLEY
-    else if(local_xh > (center_pt - bump_width/2) & local_xh < (center_pt + bump_width/2))
-    {
-      force = -mass * g * sin(2 * PI * (local_xh - (center_pt)) / bump_width);  
-    }
-    else
-    {
-      force = 0;
-    }
+      //for bumps and valleys, have Hapkit apply the gravitational force that's parallel to the "ground"
+      //using sinusoidal bumps/valleys, f = m*g*sin(pi*x_rel/length), where "x_rel" is position relative to the maximum (or minimum) point
+          
+      //BUMP: point in range of center_pt +/- bump_width/2
+      if(local_xh < -(center_pt - bump_width/2) & local_xh > -(center_pt + bump_width/2))
+      {
+        force = mass * g * sin(2 * PI * (local_xh - (-center_pt)) / bump_width);
+      }
+      //VALLEY
+      else if(local_xh > (center_pt - bump_width/2) & local_xh < (center_pt + bump_width/2))
+      {
+        force = -mass * g * sin(2 * PI * (local_xh - (center_pt)) / bump_width);  
+      }
+      else
+      {
+        force = 0;
+      }
 
     break;
 
@@ -198,14 +236,13 @@ void loop()
 //      force = 0.5; //N  
    break;
   }
-
-
-    
+  
   DEBUG_SERIAL.print(" \tForce");
-  DEBUG_SERIAL.print(force);
+  DEBUG_SERIAL.println(force);
+  
   // Step C.2: Tp = ?;    // Compute the require motor pulley torque (Tp) to generate that force
   // Slide 27, lecture 2: 
-  Tp =  (HANDLE_LENGTH * MOTOR_RADIUS) / (SECTOR_RADIUS * force);
+  Tp =  (HANDLE_LENGTH * MOTOR_RADIUS) / (SECTOR_RADIUS ) * force;
  
   //*************************************************************
   //*** Section 4. Force output (do not change) *****************
@@ -229,10 +266,7 @@ void loop()
   }  
   output = (int)(duty* 255);   // convert duty cycle to output signal
   analogWrite(pwmPin,output);  // output the signal
-  DEBUG_SERIAL.print("\t direction ");
-  DEBUG_SERIAL.print(digitalRead(dirPin));
-  DEBUG_SERIAL.print("\t output value ");
-  DEBUG_SERIAL.println(force);
+
 }
 
 //helper functions
