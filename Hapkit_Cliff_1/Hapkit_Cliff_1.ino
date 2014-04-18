@@ -15,10 +15,21 @@
 
 #define DEBUG_PIN 13
 
+//kinematics
 #define HANDLE_LENGTH (double)0.07 //70.00 mm - Solidworks
 #define SECTOR_RADIUS (double)0.0757 //calipers
 #define MOTOR_RADIUS (double)0.00837 //m - calipers
 
+//select virtual environment
+#define VIRTUAL_WALL       1
+#define LINEAR_DAMP        2
+#define NONLINEAR_FRIC     3
+#define HARD_SURFACE       4
+#define BUMP_VALLEY        5
+#define TEXTURE            6
+#define MSD                7
+
+#define ENV_TYPE           BUMP_VALLEY
 
 // Pin declares
 int pwmPin = 5; // PWM output pin for motor 1
@@ -97,31 +108,101 @@ void setup()
 // --------------------------------------------------------------
 void loop()
 {
+  //position, velocity calculated in interrupt response
+
   //should be in a protected region ***********
   double local_xh = xh;
   double local_vel_h = vel_h;
   //*******************************************
-
-  
-  //position calculated in interrupt response
-  
-  //getVelocity();
   
   // Step B.8: print xh via serial monitor
   DEBUG_SERIAL.print(" \tx_handle ");
-  DEBUG_SERIAL.print(xh,4);  
+  DEBUG_SERIAL.print(local_xh,4);  
   DEBUG_SERIAL.print(" \tvel_handle ");
-  DEBUG_SERIAL.println(vel_h,4);  
+  DEBUG_SERIAL.print(local_vel_h,4);  
+  
   //*************************************************************
   //*** Section 3. Assign a motor output force in Newtons *******  
   //*************************************************************
  
-
-  // Step C.1: force = ?; // In lab 3, you will generate a force by simply assigning this to a constant number (in Newtons)
-  force = 0.5; //N  
+  //**************** VIRTUAL ENVIRONMENTS *********************
+  //necessary constants
+  //spring constant
+  double k = 10; //N/m
+  //wall position
+  double x_wall = 0.005; //m
+  //damping constant
+  double b = 2; //N*s/m
+  //Hapkit range is +/- 5cm -> bump/valley 3cm wide, centered at +/-2.5cm
+  double center_pt = 0.025; //2.5cm on either side
+  double bump_width = 0.03; //3cm width
+  double g = 9.8; //m/s^2
+  double mass = 0.1; //kg
     
-  //DEBUG_SERIAL.print(" \tForce");
-  //DEBUG_SERIAL.println(force);
+  switch(ENV_TYPE)
+  {
+    //4A: Implements virtual wall with stiffness k at x = 0.5cm
+    case VIRTUAL_WALL:
+      
+      if(local_xh > x_wall)
+      {
+        //f = -k (hand position - wall position)
+        force = -k * ( local_xh - x_wall );
+      }
+    break;
+    
+    //4B: Implements linear damping throughout workspace
+    case LINEAR_DAMP:      
+      //f = -bv
+      force = - b * local_vel_h;
+    break;
+    
+    //4C: Karnopp model
+    case NONLINEAR_FRIC:
+    
+    break;
+    
+    //4D:
+    case HARD_SURFACE:
+
+    break;
+
+    //4E: bump at x<0, valley at x>0
+    case BUMP_VALLEY:
+    //for bumps and valleys, have Hapkit apply the gravitational force that's parallel to the "ground"
+    //using sinusoidal bumps/valleys, f = m*g*sin(pi*x_rel/length), where "x_rel" is position relative to the maximum (or minimum) point
+        
+    //BUMP: point in range of center_pt +/- bump_width/2
+    if(local_xh < -(center_pt - bump_width/2) & local_xh > -(center_pt + bump_width/2))
+    {
+      force = mass * g * sin(2 * PI * (local_xh - (-center_pt)) / bump_width);
+    }
+    //VALLEY
+    else if(local_xh > (center_pt - bump_width/2) & local_xh < (center_pt + bump_width/2))
+    {
+      force = -mass * g * sin(2 * PI * (local_xh - (center_pt)) / bump_width);  
+    }
+    else
+    {
+      force = 0;
+    }
+
+    break;
+
+    case TEXTURE:
+
+    break;
+    
+    default:
+      // Step C.1: force = ?; // In lab 3, you will generate a force by simply assigning this to a constant number (in Newtons)
+//      force = 0.5; //N  
+   break;
+  }
+
+
+    
+  DEBUG_SERIAL.print(" \tForce");
+  DEBUG_SERIAL.print(force);
   // Step C.2: Tp = ?;    // Compute the require motor pulley torque (Tp) to generate that force
   // Slide 27, lecture 2: 
   Tp =  (HANDLE_LENGTH * MOTOR_RADIUS) / (SECTOR_RADIUS * force);
@@ -148,10 +229,16 @@ void loop()
   }  
   output = (int)(duty* 255);   // convert duty cycle to output signal
   analogWrite(pwmPin,output);  // output the signal
-  
+  DEBUG_SERIAL.print("\t direction ");
+  DEBUG_SERIAL.print(digitalRead(dirPin));
+  DEBUG_SERIAL.print("\t output value ");
+  DEBUG_SERIAL.println(force);
 }
 
 //helper functions
+//********************************************************************
+
+//calculated "updatedPos" variable
 void calculatePosition()
 {
   //toggle bit 5 high (pin 13)
@@ -197,6 +284,7 @@ void calculatePosition()
   //PORTB &= ~B00100000;  
 }
 
+//function for calculating actual position and velocity in m, m/s
 void getVelocity()
 {
   static double prev_xh;
@@ -277,7 +365,7 @@ void InitOC()
   //see section 15.7: of ATmega328 datasheet
   //register descriptions section 17.11, page 158
   
-  DDRB |= _BV(1); //set bit 5 as output direction, OC1A debug pin (Pin 9)
+//  DDRB |= _BV(1); //set bit 5 as output direction, OC1A debug pin (Pin 9) ---> PIN 9 IS DIRECTION
   //B5 (11) will oscillate at half the freq
   
   //WGM3:0 set to 0,1,0,0 for output compare (clear timer on compare)
