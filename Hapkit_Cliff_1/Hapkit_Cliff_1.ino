@@ -1,7 +1,7 @@
 //--------------------------------------------------------------------------
 // Code to test basic Hapkit functionality (sensing and force output)
 // 04.11.14
-// Modified by Cliff Bargar 4/14/14
+// Modified by Cliff Bargar 4/18/14
 // ME 327 Assignment 2
 //--------------------------------------------------------------------------
 
@@ -10,6 +10,8 @@
 
 // Defines
 #define SAMPLE_PERIOD  (double)0.0004 //0.4ms
+
+//DEBUG_SERIAL statements will only print if DEBUG is nonzero
 #define DEBUG 0
 #define DEBUG_SERIAL if(DEBUG) Serial
 
@@ -29,7 +31,8 @@
 #define TEXTURE            (char)'F'
 #define MSD                (char)'G'
 
-#define ENV_TYPE           LINEAR_DAMP//BUMP_VALLEY
+//defaults to
+#define ENV_TYPE           MSD
 
 // Pin declares
 int pwmPin = 5; // PWM output pin for motor 1
@@ -125,11 +128,14 @@ void setup()
 // --------------------------------------------------------------
 void loop()
 {
+  //********************
   //position, velocity calculated in interrupt response
+  //********************
 
 
   //allow user to select environment type
   static char env_type = ENV_TYPE;
+  //check for serial --> if there's a character use it as environment selection
   if(Serial.available())
   {
     env_type = Serial.read();
@@ -188,7 +194,7 @@ void loop()
   
   //virtual wall
   //spring constant
-  double k = 50; //N/m
+  double k = 400; //N/m
   //wall position
   double x_wall = 0.005; //m
 
@@ -196,20 +202,48 @@ void loop()
   //damping constant
   double b = 10; //N*s/m
   
-  //nonlinear friction
-  double F_dyn = 0.5;   //roughly smallest noticeable force
+  //nonlinear friction -- Karnopp
+  double F_dyn = 0.05;   //roughly smallest noticeable force
   //note: cp = cn
-  double bn = 1.5;   //speeds probably top out around 0.3 during actual manipulation  
+  double bn = 4;   //speeds probably top out around 0.3 during actual manipulation  
   //note: bp = bn
   double F_stat = 1.5;   //"static" friction
   //note Dp = Dn
-  double dv = 0.025;  //"static" band
+  double dv = 0.05;  //"static" band
   
+  //hard surface
+  double k_hard = k;
+  double x_wall_hard = x_wall;
+  boolean in_wall = false;  //stores whether or not the manipulator was already "in" the wall (for calculating decaying "impact" sinusoid)
+  unsigned long impact_time;  //initial time of impact - for decaying sinusoid
+  unsigned long time_since_impact;
+  //constants for decaying sinusoid
+  double hard_amplitude = 0.4;
+  double hard_freq = 1;
+  double hard_decay = 0.1;
+  
+  //bump/valley
   //Hapkit range is +/- 5cm -> bump/valley 3cm wide, centered at +/-2.5cm
   double center_pt = 0.025; //2.5cm on either side
   double bump_width = 0.03; //3cm width
   double g = 9.8; //m/s^2
   double mass = 0.05; //kg
+  
+  //MSD w/ handle connected to mass by stiff spring
+  double k_g = 10;   //N/m
+  double b_g = .75;    //N*s/m
+  double mass_g = .2;   //kg
+  double k_u = 120;  //N/m
+  double x_eq = 0.01;//m
+  static unsigned long current_time = 0;  //measured in us
+  static unsigned long prev_time = 0;  //measured in us
+  double sample_period;
+  static double prev_accel = 0;
+  static double prev_vel_g = 0;
+  static double vel_g = 0;   //m/s   
+  static double x_g = x_eq;  //m
+  double accel;      //m/s^2
+  double force_handle;
     
   switch(env_type)
   {
@@ -230,7 +264,7 @@ void loop()
     break;
     
     //4C: Karnopp model
-    //four cases: x' > dv, 0 < x' < dv, -dv < x' < 0, x' < -dv
+    //four cases: x' > dv, 0 < x' < dv, -dv < x' < 0, x' < -dv (also have a band around 0 to account for noise)
     case NONLINEAR_FRIC:
       //x' > dv, x' < -dv
       if(local_vel_h > dv | local_vel_h < -dv)
@@ -240,13 +274,13 @@ void loop()
       }
       //-dv < x' < 0, account for noise
       //f = constant
-      else if(local_vel_h < -0.01)
+      else if(local_vel_h < -0.025)
       {
         force = F_stat;
       }
       //0 < x' < dv, account for noise
       //f = constant
-      else if(local_vel_h > 0.01)
+      else if(local_vel_h > 0.025)
       {
         force = -F_stat;
       }
@@ -260,6 +294,33 @@ void loop()
     
     //4D:
     case HARD_SURFACE:
+      //start at same place as prior virtual wall
+      
+      if(local_xh > x_wall_hard)
+      {
+        //f = -k (hand position - wall position)
+        force = -k_hard * ( local_xh - x_wall );
+        if(!in_wall)
+        {
+          in_wall = true;
+          impact_time = micros();
+        }
+        //add decaying sinusoid: F = F - A * e(-at) * cos(wt)
+        time_since_impact = micros() - impact_time;
+        force = force - hard_amplitude * exp(-hard_decay * time_since_impact) * cos(hard_freq * time_since_impact);
+      }
+      //even if it leaves the wall by a little, don't eliminate vibrations quite yet
+      else if(local_xh > x_wall_hard * 0.9)
+      {
+        time_since_impact = micros() - impact_time;
+        force = hard_amplitude * exp(-hard_decay * time_since_impact) * cos(hard_freq * time_since_impact);
+      }
+      //not "in" wall
+      else
+      {
+        in_wall = false;
+        force = 0;
+      }
 
     break;
 
@@ -284,14 +345,73 @@ void loop()
       }
 
     break;
-
+    
+    //4F: Texture - varying damping and small bumps
     case TEXTURE:
-
+      //texture :narrower bumps, smaller mass
+      force = -mass/3 * g * sin(2 * PI * (local_xh) / (bump_width/2));  
+      //also damping
+      force = force - b / 8 * local_vel_h;
+    break;
+    
+    //4G: Mass Spring Damper
+    case MSD:
+      //handle is at mass position
+      if(local_xh >= x_g)
+      {
+        //in contact with stiff sprint
+        force_handle = k_u * (local_xh - x_g);
+      }
+      else
+        //no contact
+        force_handle = 0;
+        
+      prev_accel = accel;
+      //F = mx'' = ku (x - (xh + xeq)) - k(x - xeq) - bx'
+      accel = (force_handle - k_g * (x_g - x_eq) - b_g * vel_g) / mass_g;
+      
+      //if they're not initialized make sure something weird doesn't happen
+      if(current_time == 0 && prev_time == 0)
+        prev_time = micros();
+      else
+        prev_time = current_time;
+      current_time = micros();
+      sample_period = (current_time - prev_time) / 1000000 / 62.5; //divide by 10^6
+      
+      prev_vel_g = vel_g;
+      //velocity integration
+      vel_g = vel_g + (accel + prev_accel) * sample_period/2;
+      //position integration - trapezoidal
+      x_g = x_g + (vel_g + prev_vel_g) * sample_period/2;
+      
+      //apply force to handle
+      //handle is beyond mass
+      if(local_xh >= x_g)
+      {
+        //in contact with stiff 
+        force = k_u * (x_g - local_xh);
+      }
+      else
+        //no contact
+        force = 0;
+        
+        //NOTE: this particular environment works much better with the printouts
+        //because I'm calculating the position/velocity with interrupts this is fairly benign, though
+        //but unfortunately I don't have time to fix it
+      Serial.print("xg\t");
+      Serial.print(x_g);
+      Serial.print("\txh\t");
+      Serial.print(local_xh);
+      Serial.print("\tvel_g\t");
+      Serial.print(vel_g);
+      Serial.print("\tForce\t");
+      Serial.println(force);
+    
     break;
     
     default:
       // Step C.1: force = ?; // In lab 3, you will generate a force by simply assigning this to a constant number (in Newtons)
-//      force = 0.5; //N  
+//      force = 1.5; //N  
      break;
   }
   
